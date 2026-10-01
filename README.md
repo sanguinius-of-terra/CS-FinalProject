@@ -107,6 +107,7 @@ If you want a different resolution than 1920×1080:
    ```sql
    USE physics_engine;
    UPDATE objects SET pos_x = <new_width>/2,  pos_y = <new_height>-10, width  = <new_width>  WHERE label = 'Floor';
+   UPDATE objects SET pos_x = <new_width>/2,  pos_y = 10, width  = <new_width>  WHERE label = 'Ceiling';
    UPDATE objects SET pos_x = 10,              pos_y = <new_height>/2, height = <new_height> WHERE label = 'WallL';
    UPDATE objects SET pos_x = <new_width>-10,  pos_y = <new_height>/2, height = <new_height> WHERE label = 'WallR';
    ```
@@ -120,16 +121,11 @@ If you want a different resolution than 1920×1080:
 ```sql
 USE physics_engine;
 
-INSERT INTO simulations (name, gravity, description)
-VALUES ('My Sim', 980.0, 'Custom setup');
+INSERT INTO simulations (name, gravity, description) VALUES ('My Sim', 980.0, 'Custom setup');
 
 SET @id = LAST_INSERT_ID();
 
-INSERT INTO objects
-    (simulation_id, label, shape, mass, restitution, friction_coeff,
-     pos_x, pos_y, vel_x, vel_y, radius, width, height, color, is_static)
-VALUES
-    (@id, 'MyBall', 'circle', 1.0, 0.8, 0.2, 960, 200, 100, 0, 30, NULL, NULL, '#FF5733', FALSE);
+INSERT INTO objects (simulation_id, label, shape, mass, restitution, friction_coeff,pos_x, pos_y, vel_x, vel_y, radius, width, height, color, is_static) VALUES (@id, 'MyBall', 'circle', 1.0, 0.8, 0.2, 960, 200, 100, 0,30, NULL, NULL, '#FF5733', FALSE);
 ```
 
 Run it the same way as `seed.sql`:
