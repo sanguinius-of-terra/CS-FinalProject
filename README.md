@@ -184,3 +184,7 @@ position    += velocity     × dt
 **Very slow / low FPS**
 → The broad-phase is O(n²). For >50 objects, implement a spatial hash.
   Also try lowering `PHYSICS_SUBSTEPS` if your machine is slow.
+
+**PyGame window closes for no apparent reason**
+→ First, confirm that mysql-connector is working properly.
+  If issue persists, try "use_pure=True" when initialising the MySQL connection.
