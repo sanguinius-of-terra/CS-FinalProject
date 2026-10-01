@@ -75,7 +75,7 @@ saved password back to a placeholder.
 ## Step 4 — Run It
 
 ```bash
-python main.py
+python drag-implement-file.py
 ```
 
 You should see a **1920×1080** window with a menu listing the 3 presets.
@@ -84,16 +84,18 @@ You should see a **1920×1080** window with a menu listing the 3 presets.
 
 ## Controls
 
-| Key      | Action                        |
-|----------|-------------------------------|
-| ↑ / ↓   | Navigate menu                 |
-| ENTER    | Load selected simulation      |
-| SPACE    | Pause / Resume                |
-| R        | Restart current simulation    |
-| D        | Toggle AABB debug boxes       |
-| V        | Toggle velocity arrows        |
-| ESC      | Return to menu                |
-| Q        | Quit                          |
+| Key               | Action                         |
+|-------------------|--------------------------------|
+| ↑ / ↓             | Navigate menu                  |
+| ENTER             | Load selected simulation       |
+| SPACE             | Pause / Resume                 |
+| P                 | Enable object dragging         |
+| L-CLICK DRAG      | Drag objects if enabled        |
+| R                 | Restart current simulation     |
+| D                 | Toggle AABB debug boxes        |
+| V                 | Toggle velocity arrows         |
+| ESC               | Return to menu                 |
+| Q                 | Quit                           |
 
 ---
 
@@ -163,6 +165,12 @@ position    += velocity     × dt
 1. **Impulse** — changes velocities based on coefficient of restitution
 2. **Friction** — Coulomb friction along the contact tangent
 3. **Positional correction** — gently pushes overlapping bodies apart
+
+### Dragging Objects
+1. **Hit Detection**: When you click, the code checks if your mouse coordinates fall within an object's radius or rectangular bounds.
+2. **Vector Calculation**: It calculates the exact distance and direction from the object's current position to your mouse.
+3. **Speed Injection**: It divides that distance by the time passed since the last frame (dt). This sets the object's velocity to the precise speed needed to reach your cursor in one frame.
+4. **Momentum Conservation**: Because the object is genuinely flying toward your mouse rather than just being drawn there, letting go leaves its velocity intact
 
 ---
 
