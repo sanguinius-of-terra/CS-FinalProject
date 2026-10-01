@@ -6,7 +6,6 @@
 
 import math
 
-
 class Vector2:
     __slots__ = ("x", "y")
 
@@ -60,7 +59,6 @@ class Vector2:
         return self.x * other.x + self.y * other.y
 
     def cross(self, other) -> float:
-        """Scalar z-component of the 3-D cross product."""
         return self.x * other.y - self.y * other.x
 
     def length_sq(self) -> float:
@@ -76,19 +74,22 @@ class Vector2:
         return Vector2(self.x / mag, self.y / mag)
 
     def normalize(self):
-        """Normalise in-place."""
         mag = self.length()
         if mag >= 1e-12:
             self.x /= mag
             self.y /= mag
 
     def reflect(self, normal: "Vector2") -> "Vector2":
-        """Reflect this vector across a surface with the given normal."""
         return self - normal * (2.0 * self.dot(normal))
 
     def perpendicular(self) -> "Vector2":
-        """Return a vector rotated 90° counter-clockwise."""
         return Vector2(-self.y, self.x)
+
+    def rotate(self, angle: float) -> "Vector2":
+        """Rotate this vector by the given angle in radians."""
+        c = math.cos(angle)
+        s = math.sin(angle)
+        return Vector2(self.x * c - self.y * s, self.x * s + self.y * c)
 
     def copy(self) -> "Vector2":
         return Vector2(self.x, self.y)

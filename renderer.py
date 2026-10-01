@@ -9,11 +9,11 @@ import pygame.gfxdraw
 from typing import List, Dict, Any
 
 from rigidbody import RigidBody
+from vector2 import Vector2
 from config    import WINDOW_WIDTH, WINDOW_HEIGHT
 
-# ── Colour palette ───────────────────────────────────────────────────────────
 BG_COLOR      = (15, 15, 25)
-HUD_BG        = (25, 25, 40, 180)    # semi-transparent
+HUD_BG        = (25, 25, 40, 180)
 TEXT_COLOR    = (220, 220, 255)
 ACCENT_COLOR  = (80, 200, 255)
 STATIC_TINT   = (100, 100, 120)
@@ -35,10 +35,9 @@ class Renderer:
         self.font_sm     = pygame.font.SysFont("monospace", 13)
         self.font_md     = pygame.font.SysFont("monospace", 16, bold=True)
         self.font_lg     = pygame.font.SysFont("monospace", 22, bold=True)
-        self.show_debug  = False   # toggle with D key
-        self.show_vel    = False   # toggle with V key
+        self.show_debug  = False
+        self.show_vel    = False
 
-    # ── Main draw call ───────────────────────────
     def draw(
         self,
         bodies:   List[RigidBody],
@@ -58,7 +57,6 @@ class Renderer:
 
         self._draw_hud(sim_info, fps, paused, len(bodies))
 
-    # ── Background grid ──────────────────────────
     def _draw_grid(self):
         grid_color = (30, 30, 48)
         step = 40
@@ -67,49 +65,37 @@ class Renderer:
         for y in range(0, WINDOW_HEIGHT, step):
             pygame.draw.line(self.screen, grid_color, (0, y), (WINDOW_WIDTH, y))
 
-    # ── Body rendering ───────────────────────────
     def _draw_body(self, body: RigidBody):
         color = _hex_to_rgb(body.color)
-
-        # Dim static bodies slightly
         if body.is_static:
             color = tuple(int(c * 0.7) for c in color)
 
-        cx = int(body.position.x)
-        cy = int(body.position.y)
-
         if body.shape == "circle":
+            cx, cy = int(body.position.x), int(body.position.y)
             r = max(1, int(body.radius))
-            # Anti-aliased filled circle (smooth edges instead of jagged pixels)
             pygame.gfxdraw.filled_circle(self.screen, cx, cy, r, color)
             pygame.gfxdraw.aacircle(self.screen, cx, cy, r, color)
-            # Bright rim
+            
+            line_end = body.position + Vector2(r, 0).rotate(body.angle)
+            pygame.draw.line(self.screen, (255, 255, 255), (cx, cy), (int(line_end.x), int(line_end.y)), 2)
+            
             rim = tuple(min(255, c + 60) for c in color)
             pygame.gfxdraw.aacircle(self.screen, cx, cy, r, rim)
-            pygame.gfxdraw.aacircle(self.screen, cx, cy, r - 1, rim)
-            # Centre dot
-            pygame.gfxdraw.filled_circle(self.screen, cx, cy, 3, rim)
-
-        else:  # rect — position is centre
-            hw = int(body.half_w)
-            hh = int(body.half_h)
-            rect = pygame.Rect(cx - hw, cy - hh, hw * 2, hh * 2)
-            pygame.draw.rect(self.screen, color, rect)
+        else:
+            verts = [(int(v.x), int(v.y)) for v in body.get_vertices()]
+            pygame.draw.polygon(self.screen, color, verts)
             rim = tuple(min(255, c + 60) for c in color)
-            pygame.draw.rect(self.screen, rim, rect, 2)
+            pygame.draw.polygon(self.screen, rim, verts, 2)
 
-        # Label
         if body.label and not body.is_static:
             surf = self.font_sm.render(body.label, True, TEXT_COLOR)
-            self.screen.blit(surf, (cx - surf.get_width() // 2, cy - 8))
+            self.screen.blit(surf, (int(body.position.x) - surf.get_width() // 2, int(body.position.y) - 8))
 
-    # ── AABB debug overlay ───────────────────────
     def _draw_aabb(self, body: RigidBody):
         x1, y1, x2, y2 = body.aabb()
         rect = pygame.Rect(x1, y1, x2 - x1, y2 - y1)
         pygame.draw.rect(self.screen, (80, 255, 80), rect, 1)
 
-    # ── Velocity arrow ───────────────────────────
     def _draw_velocity_arrow(self, body: RigidBody):
         scale  = 0.08
         ox, oy = int(body.position.x), int(body.position.y)
@@ -118,10 +104,8 @@ class Renderer:
         if abs(ex - ox) < 2 and abs(ey - oy) < 2:
             return
         pygame.draw.line(self.screen, VELOCITY_COLOR, (ox, oy), (ex, ey), 2)
-        # Arrow head
         pygame.draw.circle(self.screen, VELOCITY_COLOR, (ex, ey), 4)
 
-    # ── HUD ─────────────────────────────────────
     def _draw_hud(
         self,
         sim_info: Dict[str, Any],
@@ -135,21 +119,21 @@ class Renderer:
             f"Bodies: {n_bodies}",
             f"Gravity: {sim_info.get('gravity', 980):.0f} px/s²",
             "",
-            "[SPACE] Pause/Resume",
-            "[R]     Restart",
-            "[D]     Debug AABBs",
-            "[V]     Velocity arrows",
-            "[ESC]   Menu",
+            "[SPACE]       Pause/Resume",
+            "[R]           Restart",
+            "[P]           Toggle Drag Mode",
+            "[L-CLICK]     Drag",
+            "[V]           Velocity arrows",
+            "[ESC]         Menu",
         ]
         if paused:
             lines.insert(0, "⏸  PAUSED")
 
         padding = 10
         line_h  = 18
-        box_w   = 210
+        box_w   = 280
         box_h   = len(lines) * line_h + padding * 2
 
-        # Semi-transparent background panel
         panel = pygame.Surface((box_w, box_h), pygame.SRCALPHA)
         panel.fill((20, 20, 40, 190))
         self.screen.blit(panel, (8, 8))
@@ -161,12 +145,10 @@ class Renderer:
             surf = self.font_sm.render(line, True, color)
             self.screen.blit(surf, (padding + 8, padding + 8 + i * line_h))
 
-    # ── Menu screen ──────────────────────────────
     def draw_menu(self, simulations, selected_index: int):
         self.screen.fill(BG_COLOR)
         self._draw_grid()
 
-        # Title
         title = self.font_lg.render("2D PHYSICS ENGINE", True, ACCENT_COLOR)
         self.screen.blit(title, (WINDOW_WIDTH // 2 - title.get_width() // 2, 40))
 
@@ -176,7 +158,6 @@ class Renderer:
         )
         self.screen.blit(sub, (WINDOW_WIDTH // 2 - sub.get_width() // 2, 80))
 
-        # List
         start_y = 130
         for i, sim in enumerate(simulations):
             bg_color = (40, 70, 120) if i == selected_index else (25, 25, 50)

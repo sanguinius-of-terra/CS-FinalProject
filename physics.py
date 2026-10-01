@@ -1,50 +1,29 @@
 # physics.py
 # ──────────────────────────────────────────────
 #  Core physics engine:
-#   • Force application (gravity, friction)
-#   • Collision detection (circle-circle,
-#     AABB-AABB, circle-AABB)
-#   • Collision resolution (impulse + positional
-#     correction)
+#   • Separating Axis Theorem (SAT)
+#   • Rotational impulses & offset friction
 # ──────────────────────────────────────────────
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from vector2   import Vector2
 from rigidbody import RigidBody
-from config    import (
-    POSITION_SLOP,
-    POSITION_PERCENT,
-    MAX_DT,
-)
-
-
-# ── Collision manifold ───────────────────────────────────────────────────────
+from config    import POSITION_SLOP, POSITION_PERCENT, MAX_DT
 
 @dataclass
 class Manifold:
-    """Stores all data about one collision between two bodies."""
     a:          RigidBody
     b:          RigidBody
     normal:     Vector2 = field(default_factory=Vector2.zero)
     penetration: float  = 0.0
+    contact:    Vector2 = field(default_factory=Vector2.zero)
     has_contact: bool   = False
-
-
-# ── Physics world ────────────────────────────────────────────────────────────
 
 class PhysicsWorld:
     def __init__(self, gravity: float = 980.0, substeps: int = 4):
-        """
-        gravity  — downward acceleration in pixels/s²
-                   (980 ≈ real 9.8 m/s² at 100 px = 1 m scale)
-        substeps — how many mini-physics-steps to run per rendered frame.
-                   Higher = more accurate collisions and less tunneling
-                   through thin/fast objects, at the cost of CPU time.
-                   1 = original behaviour. 4-8 is a good quality boost.
-        """
         self.gravity   = Vector2(0, gravity)
         self.bodies:   List[RigidBody] = []
         self.substeps  = max(1, substeps)
@@ -58,248 +37,224 @@ class PhysicsWorld:
     def clear(self):
         self.bodies.clear()
 
-    # ── Main step ────────────────────────────────
     def step(self, dt: float):
-        """
-        Called once per rendered frame. Internally runs `self.substeps`
-        smaller physics updates so collisions are resolved more precisely
-        than the visual frame rate alone would allow.
-        """
         dt = min(dt, MAX_DT)
         sub_dt = dt / self.substeps
-
         for _ in range(self.substeps):
             self._substep(sub_dt)
 
     def _substep(self, dt: float):
-        # 1. Apply forces (gravity + friction pre-pass)
         for body in self.bodies:
-            self._apply_gravity(body)
+            if not body.is_static:
+                body.apply_force(self.gravity * body.mass)
 
-        # 2. Broad-phase + narrow-phase collision
         manifolds = self._detect_collisions()
 
-        # 3. Resolve collisions (impulse)
         for m in manifolds:
             self._resolve_impulse(m)
-
-        # 4. Positional correction (prevent sinking)
         for m in manifolds:
             self._positional_correction(m)
 
-        # 5. Apply friction along contact tangent
-        for m in manifolds:
-            self._apply_friction(m)
-
-        # 6. Integrate all bodies
         for body in self.bodies:
             body.integrate(dt)
-
-    # ── Forces ──────────────────────────────────
-
-    def _apply_gravity(self, body: RigidBody):
-        if body.is_static:
-            return
-        # F = m * g
-        body.apply_force(self.gravity * body.mass)
-
-    # ── Collision detection ──────────────────────
 
     def _detect_collisions(self) -> List[Manifold]:
         manifolds = []
         n = len(self.bodies)
         for i in range(n):
             for j in range(i + 1, n):
-                a = self.bodies[i]
-                b = self.bodies[j]
-
-                # Skip pairs where both are static
+                a, b = self.bodies[i], self.bodies[j]
                 if a.is_static and b.is_static:
                     continue
-
-                # Broad phase
                 if not a.aabb_overlaps(b):
                     continue
-
-                # Narrow phase
                 m = self._narrow_phase(a, b)
                 if m and m.has_contact:
                     manifolds.append(m)
-
         return manifolds
 
     def _narrow_phase(self, a: RigidBody, b: RigidBody) -> Optional[Manifold]:
         if a.shape == "circle" and b.shape == "circle":
             return self._circle_vs_circle(a, b)
         elif a.shape == "rect" and b.shape == "rect":
-            return self._aabb_vs_aabb(a, b)
+            return self._poly_vs_poly(a, b)
         elif a.shape == "circle" and b.shape == "rect":
-            return self._circle_vs_aabb(a, b)
+            return self._circle_vs_poly(a, b)
         elif a.shape == "rect" and b.shape == "circle":
-            m = self._circle_vs_aabb(b, a)
-            if m:
-                m.normal = -m.normal   # flip normal since we swapped order
+            m = self._circle_vs_poly(b, a)
+            if m and m.has_contact:
+                m.normal = -m.normal
             return m
         return None
 
-    # ── Circle vs Circle ────────────────────────
     def _circle_vs_circle(self, a: RigidBody, b: RigidBody) -> Manifold:
         m = Manifold(a, b)
         diff = b.position - a.position
         dist_sq = diff.length_sq()
-        radii   = a.radius + b.radius
-
+        radii = a.radius + b.radius
         if dist_sq >= radii * radii:
-            return m  # no contact
-
+            return m
         dist = math.sqrt(dist_sq)
         m.has_contact = True
-
         if dist < 1e-6:
-            # Exactly overlapping — push apart on arbitrary axis
-            m.normal      = Vector2(1, 0)
+            m.normal = Vector2(1, 0)
             m.penetration = radii
+            m.contact = a.position
         else:
-            m.normal      = diff / dist        # unit vector a→b
+            m.normal = diff / dist
             m.penetration = radii - dist
-
+            m.contact = a.position + m.normal * a.radius
         return m
 
-    # ── AABB vs AABB ────────────────────────────
-    def _aabb_vs_aabb(self, a: RigidBody, b: RigidBody) -> Manifold:
+    def _poly_vs_poly(self, a: RigidBody, b: RigidBody) -> Manifold:
         m = Manifold(a, b)
-        diff = b.position - a.position
-
-        overlap_x = (a.half_w + b.half_w) - abs(diff.x)
-        overlap_y = (a.half_h + b.half_h) - abs(diff.y)
-
-        if overlap_x <= 0 or overlap_y <= 0:
-            return m  # separating axis found
-
+        verts_a = a.get_vertices()
+        verts_b = b.get_vertices()
+        
+        axes = [
+            (verts_a[1] - verts_a[0]).normalized().perpendicular(),
+            (verts_a[2] - verts_a[1]).normalized().perpendicular(),
+            (verts_b[1] - verts_b[0]).normalized().perpendicular(),
+            (verts_b[2] - verts_b[1]).normalized().perpendicular()
+        ]
+        
+        min_overlap = float('inf')
+        smallest_axis = Vector2.zero()
+        
+        for axis in axes:
+            min_a, max_a = self._project_vertices(verts_a, axis)
+            min_b, max_b = self._project_vertices(verts_b, axis)
+            overlap = min(max_a, max_b) - max(min_a, min_b)
+            
+            if overlap <= 0:
+                return m
+            if overlap < min_overlap:
+                min_overlap = overlap
+                smallest_axis = axis
+                
         m.has_contact = True
-
-        # Push along the axis with the smallest overlap
-        if overlap_x < overlap_y:
-            m.normal      = Vector2(1, 0) if diff.x > 0 else Vector2(-1, 0)
-            m.penetration = overlap_x
+        if (b.position - a.position).dot(smallest_axis) < 0:
+            smallest_axis = -smallest_axis
+            
+        m.normal = smallest_axis
+        m.penetration = min_overlap
+        
+        contacts = []
+        for v in verts_a:
+            if b.contains(v.x, v.y): contacts.append(v)
+        for v in verts_b:
+            if a.contains(v.x, v.y): contacts.append(v)
+            
+        if contacts:
+            cx = sum(v.x for v in contacts) / len(contacts)
+            cy = sum(v.y for v in contacts) / len(contacts)
+            m.contact = Vector2(cx, cy)
         else:
-            m.normal      = Vector2(0, 1) if diff.y > 0 else Vector2(0, -1)
-            m.penetration = overlap_y
-
+            m.contact = a.position + (b.position - a.position) * 0.5
+            
         return m
 
-    # ── Circle vs AABB ──────────────────────────
-    def _circle_vs_aabb(self, circle: RigidBody, rect: RigidBody) -> Manifold:
-        m = Manifold(circle, rect)
-
-        # Clamp circle centre to rect's extents → find closest point on rect
-        diff    = circle.position - rect.position
-        clamped = Vector2(
-            max(-rect.half_w, min(diff.x, rect.half_w)),
-            max(-rect.half_h, min(diff.y, rect.half_h)),
-        )
-
+    def _circle_vs_poly(self, circle: RigidBody, poly: RigidBody) -> Manifold:
+        m = Manifold(circle, poly)
+        
+        # Transform circle center into poly's local space for closest point calculation
+        local_c = (circle.position - poly.position).rotate(-poly.angle)
+        clamped_x = max(-poly.half_w, min(local_c.x, poly.half_w))
+        clamped_y = max(-poly.half_h, min(local_c.y, poly.half_h))
+        
         inside = False
-
-        # If circle centre is inside the rect, push it to the nearest edge
-        if diff.x == clamped.x and diff.y == clamped.y:
+        # If the circle's center is completely inside the rectangle bounds
+        if local_c.x == clamped_x and local_c.y == clamped_y:
             inside = True
-            if abs(diff.x) > abs(diff.y):
-                clamped.x = rect.half_w if clamped.x > 0 else -rect.half_w
+            # Force the contact point to the nearest outer edge
+            if abs(poly.half_w - abs(local_c.x)) < abs(poly.half_h - abs(local_c.y)):
+                clamped_x = poly.half_w if local_c.x > 0 else -poly.half_w
             else:
-                clamped.y = rect.half_h if clamped.y > 0 else -rect.half_h
-
-        closest = rect.position + clamped
-        sep     = circle.position - closest
-        dist_sq = sep.length_sq()
-
-        if not inside and dist_sq >= circle.radius * circle.radius:
-            return m  # no contact
-
-        dist = math.sqrt(dist_sq) if dist_sq > 1e-12 else 0.0
-
+                clamped_y = poly.half_h if local_c.y > 0 else -poly.half_h
+                
+        closest_local = Vector2(clamped_x, clamped_y)
+        
+        # Transform the contact point back to world space
+        closest_world = closest_local.rotate(poly.angle) + poly.position
+        
+        # Vector from the circle's center to the closest point on the polygon
+        diff = closest_world - circle.position
+        dist_sq = diff.length_sq()
+        
+        if not inside and dist_sq >= circle.radius**2:
+            return m  # No contact
+            
         m.has_contact = True
-        if dist < 1e-6:
-            m.normal      = Vector2(0, -1)
-            m.penetration = circle.radius
+        dist = math.sqrt(dist_sq) if dist_sq > 1e-12 else 0.0001
+        
+        if inside:
+            # If inside, the normal must push the circle OUT toward the nearest edge
+            m.normal = -diff / dist
+            m.penetration = circle.radius + dist
+            m.contact = closest_world
         else:
-            m.normal      = sep / dist
+            # If outside, the normal pushes against the outer face of the polygon
+            m.normal = diff / dist
             m.penetration = circle.radius - dist
-            if not inside:
-                m.normal = -m.normal
-
+            m.contact = closest_world
+            
         return m
 
-    # ── Impulse resolution ───────────────────────
+    def _project_vertices(self, vertices: List[Vector2], axis: Vector2) -> Tuple[float, float]:
+        dots = [v.dot(axis) for v in vertices]
+        return min(dots), max(dots)
+
     def _resolve_impulse(self, m: Manifold):
         a, b = m.a, m.b
+        ra = m.contact - a.position
+        rb = m.contact - b.position
 
-        # Relative velocity along contact normal
-        rel_vel = b.velocity - a.velocity
+        va = a.velocity + Vector2(-a.angular_velocity * ra.y, a.angular_velocity * ra.x)
+        vb = b.velocity + Vector2(-b.angular_velocity * rb.y, b.angular_velocity * rb.x)
+        rel_vel = vb - va
+
         vel_along_normal = rel_vel.dot(m.normal)
-
-        # Don't resolve if objects are separating
         if vel_along_normal > 0:
             return
 
         e = min(a.restitution, b.restitution)
+        ra_cross_n = ra.cross(m.normal)
+        rb_cross_n = rb.cross(m.normal)
 
-        # Impulse scalar
-        j = -(1 + e) * vel_along_normal
-        j /= (a.inv_mass + b.inv_mass)
+        inv_mass_sum = (a.inv_mass + b.inv_mass + 
+                        (ra_cross_n**2) * a.inv_I + 
+                        (rb_cross_n**2) * b.inv_I)
 
+        j = -(1 + e) * vel_along_normal / inv_mass_sum
         impulse = m.normal * j
 
-        if not a.is_static:
-            a.velocity -= impulse * a.inv_mass
-        if not b.is_static:
-            b.velocity += impulse * b.inv_mass
+        a.apply_impulse(-impulse, ra)
+        b.apply_impulse(impulse, rb)
+        
+        va_f = a.velocity + Vector2(-a.angular_velocity * ra.y, a.angular_velocity * ra.x)
+        vb_f = b.velocity + Vector2(-b.angular_velocity * rb.y, b.angular_velocity * rb.x)
+        rel_vel_f = vb_f - va_f
+        
+        tangent = rel_vel_f - m.normal * rel_vel_f.dot(m.normal)
+        if tangent.length_sq() > 1e-12:
+            tangent.normalize()
+            ra_cross_t = ra.cross(tangent)
+            rb_cross_t = rb.cross(tangent)
+            
+            inv_mass_sum_t = (a.inv_mass + b.inv_mass + 
+                              (ra_cross_t**2) * a.inv_I + 
+                              (rb_cross_t**2) * b.inv_I)
+                              
+            jt = -rel_vel_f.dot(tangent) / inv_mass_sum_t
+            mu = (a.friction_coeff + b.friction_coeff) * 0.5
+            
+            friction_impulse = tangent * max(-j * mu, min(jt, j * mu))
+            a.apply_impulse(-friction_impulse, ra)
+            b.apply_impulse(friction_impulse, rb)
 
-    # ── Friction ─────────────────────────────────
-    def _apply_friction(self, m: Manifold):
-        a, b = m.a, m.b
-
-        rel_vel = b.velocity - a.velocity
-
-        # Tangent vector (perpendicular to normal)
-        dot_n   = rel_vel.dot(m.normal)
-        tangent = rel_vel - m.normal * dot_n
-        if tangent.length_sq() < 1e-12:
-            return
-        tangent.normalize()
-
-        # Friction impulse magnitude
-        jt = -rel_vel.dot(tangent)
-        jt /= (a.inv_mass + b.inv_mass)
-
-        # Coulomb's law: clamp to μ * normal impulse
-        mu = (a.friction_coeff + b.friction_coeff) * 0.5
-
-        # Approximate normal impulse from restitution step
-        e        = min(a.restitution, b.restitution)
-        vel_n    = (b.velocity - a.velocity).dot(m.normal)
-        j_normal = abs(-(1 + e) * vel_n / (a.inv_mass + b.inv_mass))
-
-        friction_impulse: Vector2
-        if abs(jt) < j_normal * mu:
-            friction_impulse = tangent * jt
-        else:
-            friction_impulse = tangent * (-j_normal * mu)
-
-        if not a.is_static:
-            a.velocity -= friction_impulse * a.inv_mass
-        if not b.is_static:
-            b.velocity += friction_impulse * b.inv_mass
-
-    # ── Positional correction (Baumgarte) ────────
     def _positional_correction(self, m: Manifold):
         a, b = m.a, m.b
-
-        correction_mag = (
-            max(m.penetration - POSITION_SLOP, 0.0)
-            / (a.inv_mass + b.inv_mass)
-            * POSITION_PERCENT
-        )
+        correction_mag = max(m.penetration - POSITION_SLOP, 0.0) / (a.inv_mass + b.inv_mass) * POSITION_PERCENT
         correction = m.normal * correction_mag
 
         if not a.is_static:
