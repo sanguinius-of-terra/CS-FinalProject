@@ -1,4 +1,4 @@
-# 2D Physics Engine — Implementation Guide
+# 2D Physics Engine — Implementation Guide (might be lil outdated)
 ========================================================
 
 ## Project File Structure
