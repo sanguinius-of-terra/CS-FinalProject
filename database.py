@@ -15,7 +15,7 @@ from rigidbody import RigidBody
 
 
 def _get_connection():
-    return mysql.connector.connect(**DB_CONFIG)
+    return mysql.connector.connect(**DB_CONFIG, use_pure=True)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
